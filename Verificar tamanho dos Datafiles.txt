@@ -1,0 +1,9 @@
+select Name, 
+(convert(decimal,size)) * (8192.0/1048576) File_Size, 
+(convert(numeric,fileproperty(name,'SpaceUsed'))) * (8192.0/1048576) MB_Used, 
+((convert(numeric,size)) * (8192.0/1048576) - (convert(numeric,fileproperty(name,'SpaceUsed'))) * (8192.0/1048576)) MB_Free, 
+(((convert(numeric,fileproperty(name,'SpaceUsed'))) * (8192.0/1048576))* 100) / ((convert(numeric,size)) * (8192.0/1048576) ) Porcentual_Utilizado, 
+(100)-((((convert(numeric,fileproperty(name,'SpaceUsed'))) * (8192.0/1048576))* 100) / ((convert(numeric,size)) * (8192.0/1048576) ))  Porcentual_livre 
+from sysfiles 
+order by 
+fileproperty(name,'IsLogFile')

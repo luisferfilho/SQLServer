@@ -1,0 +1,48 @@
+\\https://medium.com/@pelegrini/indicadores-do-sql-server-page-life-expectancy-b82d0d0a377b
+\\Analise-Page-life-Expectancy
+--Não é mais recomendado usar como parâmetro para PLE o valor de 300 segundos
+--como era em versões mais antigas do SQL Server.
+--Este número é demasiado baixo para os servidores que existem hoje em dia.
+--Uma fórmula comumente usada atualmente é dos mesmos 300s mas para cada 4GB de memória disponível no servidor ou no cache de dados.
+
+--EXEMPLO:
+--40GB INSTANCIA
+--300s para cada 4GB de memoria
+--40 / 4 = 10
+--10 * 300s =  3000
+--o contador tem que estar acima de 3000 segundos   
+
+
+
+
+--Query que verifica o PLE atual
+
+SELECT [object_name]
+    ,[counter_name]
+    ,[cntr_value] 
+FROM sys.dm_os_performance_counters
+WHERE [object_name] LIKE '%Manager%'
+AND [counter_name] = 'Page life expectancy'
+GO
+
+--A query abaixo retorna dois valores de limite mínimo para PLE.
+--Um deles leva em consideração a memória disponível e o outro o cache de dados.
+--É preferível utilizar o maior limite, mas isso vai depender da situação.
+
+WITH 
+    tm_cte AS (
+        SELECT CONVERT(int, value_in_use) / 1024. [memory_gb],
+            CONVERT(int, value_in_use) / 1024. / 4. * 300 [counter_by_memory]
+        FROM sys.configurations
+        WHERE name like 'max server memory%'
+    ),
+    cached_cte AS (
+        SELECT 
+        COUNT(*) * 8. / 1024. / 1024. [cached_gb],
+            COUNT(*) * 8. / 1024. / 1024.  / 4. * 300 [counter_by_cache]
+        FROM [sys].[dm_os_buffer_descriptors]
+)
+SELECT CEILING(counter_by_memory) [Limite 1],
+    CEILING(counter_by_cache) [Limite 2]
+FROM tm_cte, cached_cte;
+

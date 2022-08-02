@@ -1,0 +1,13 @@
+--Compress de tabela  ( esta por odem de tamanho)             
+ 
+SELECT object_name(id),'ALTER TABLE '+object_name(id)+' REBUILD WITH (DATA_COMPRESSION = PAGE)', rowcnt, dpages * 8/1024 AS [tamanho] FROM sysindexes
+WHERE indid IN (1,0) AND objectproperty(id,'isusertable') = 1 
+ORDER BY [tamanho] DESC
+ 
+ 
+--Compress de Indices ( esta por ordem de tamanho.
+ 
+
+SELECT object_name(id),'ALTER INDEX ALL ON '+object_name(id) +' REBUILD PARTITION = ALL WITH (FILLFACTOR = 90, DATA_COMPRESSION = PAGE);', dpages * 8/1024 AS [TAMANHO]  FROM sysindexes (nolock)
+ WHERE indid IN (1,0) AND objectproperty(id,'isusertable') = 1 
+ORDER BY TAMANHO DESC

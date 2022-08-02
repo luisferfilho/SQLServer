@@ -1,0 +1,20 @@
+--Verifica Locks
+exec sp_WhoIsActive
+@output_column_list = '[session_id],[blocking_session_id],[wait_info],[sql_text],[login_name],[status],[database_name],[start_time]',
+@get_locks=1
+--permite analisar cada sessão e contar quantas outras sessões estão em lock aguardando a liberação de objetos pelo bloqueador
+,@find_block_leaders =1
+
+-- Verificando Sessão Específica
+exec sp_WhoIsActive
+--@output_column_list = '[session_id],[blocking_session_id],[wait_info],[sql_text],[login_name],[status],[database_name],[start_time]',
+@filter= '334'
+,@filter_type='session'
+--Traz toda a query
+---,@get_full_inner_text = 1
+--Traz o plano de execução da query
+--,@get_plans= 1
+-- Traz o volume de dados escrito no log com a query
+--,@get_transaction_info =1
+--Essa coluna mostra o tempo médio de execução da query atual em execução por cada sessão (TEMPO MEDIO SOMENTO DO TRECHO ATUAL)
+--,@get_avg_time = 1

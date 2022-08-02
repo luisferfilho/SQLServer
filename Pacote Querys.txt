@@ -1,0 +1,286 @@
+--Número de consultas que tiveram a maior média de leituras físicas de E/S nas últimas 24 horas, com a média de contagem de linhas e execuções correspondente
+SELECT TOP 10 rs.avg_physical_io_reads, qt.query_sql_text,
+q.query_id, qt.query_text_id, p.plan_id, rs.runtime_stats_id,
+rsi.start_time, rsi.end_time, rs.avg_rowcount, rs.count_executions
+FROM sys.query_store_query_text AS qt
+JOIN sys.query_store_query AS q
+ON qt.query_text_id = q.query_text_id
+JOIN sys.query_store_plan AS p
+ON q.query_id = p.query_id
+JOIN sys.query_store_runtime_stats AS rs
+ON p.plan_id = rs.plan_id
+JOIN sys.query_store_runtime_stats_interval AS rsi
+ON rsi.runtime_stats_interval_id = rs.runtime_stats_interval_id
+WHERE rsi.start_time >= DATEADD(hour, -24, GETUTCDATE())
+ORDER BY rs.avg_physical_io_reads DESC;
+
+--Número de consultas com o tempo médio de execução mais longo na última hora
+SELECT TOP 10 rs.avg_duration, qt.query_sql_text, q.query_id,
+qt.query_text_id, p.plan_id, GETUTCDATE() AS CurrentUTCTime,
+rs.last_execution_time
+FROM sys.query_store_query_text AS qt
+JOIN sys.query_store_query AS q
+ON qt.query_text_id = q.query_text_id
+JOIN sys.query_store_plan AS p
+ON q.query_id = p.query_id
+JOIN sys.query_store_runtime_stats AS rs
+ON p.plan_id = rs.plan_id
+WHERE rs.last_execution_time > DATEADD(hour, -1, GETUTCDATE())
+ORDER BY rs.avg_duration DESC;
+
+--Número de execuções de cada consulta
+SELECT q.query_id, qt.query_text_id, qt.query_sql_text,
+SUM(rs.count_executions) AS total_execution_count
+FROM sys.query_store_query_text AS qt
+JOIN sys.query_store_query AS q
+ON qt.query_text_id = q.query_text_id
+JOIN sys.query_store_plan AS p
+ON q.query_id = p.query_id
+JOIN sys.query_store_runtime_stats AS rs
+ON p.plan_id = rs.plan_id
+GROUP BY q.query_id, qt.query_text_id, qt.query_sql_text
+ORDER BY total_execution_count DESC;
+
+--ENCONTRAR OPERAÇÕES DE INDEX SCAN!!!
+WITH Scansearch AS (SELECT qp.query_plan, cp.usecounts, ss.query('.') AS StmtSimple, cp.plan_handle
+FROM sys.dm_exec_cached_plans cp (NOLOCK)
+CROSS APPLY sys.dm_exec_query_plan(cp.plan_handle) qp
+CROSS APPLY qp.query_plan.nodes('//StmtSimple') AS p(ss)
+WHERE cp.cacheobjtype = 'Compiled Plan'
+AND (ss.exist('//RelOp[@PhysicalOp = "Index Scan"]') = 1
+OR ss.exist('//RelOp[@PhysicalOp = "Clustered Index Scan"]') = 1)
+AND ss.exist('@QueryHash') = 1
+)
+SELECT StmtSimple.value('StmtSimple[1]/@StatementText', 'VARCHAR(4000)') AS sql_text,
+c2.value('@Database','sysname') AS database_name,
+c1.value('@PhysicalOp','sysname') AS physical_operator,
+c2.value('@Index','sysname') AS index_name,
+c3.value('@ScalarString[1]','VARCHAR(4000)') AS [predicate]
+FROM Scansearch ss
+CROSS APPLY query_plan.nodes('//RelOp') AS q1(c1)
+CROSS APPLY c1.nodes('./IndexScan') AS q4(c4)
+CROSS APPLY c1.nodes('./IndexScan/Object') AS q2(c2)
+OUTER APPLY c1.nodes('./IndexScan/Predicate/ScalarOperator[1]') AS q3(c3)
+WHERE (c1.exist('@PhysicalOp[. = "Index Scan"]') = 1
+OR c1.exist('@PhysicalOp[. = "Clustered Index Scan"]') = 1)
+
+--Listar Tabelas mais utilizadas pelo Banco de dados
+SELECT
+[s].[name] AS [Schema],
+[o].[name] AS [Object],
+[i].[name] AS [Index],
+[i].[type_desc] AS [Type],
+(DPCount + CPCount) * 8 / 1024 AS [TotalMB]
+FROM
+(SELECT
+allocation_unit_id,
+SUM (CASE WHEN ([is_modified] = 1)
+THEN 1 ELSE 0 END) AS [DPCount],
+SUM (CASE WHEN ([is_modified] = 1)
+THEN 0 ELSE 1 END) AS [CPCount]
+FROM sys.dm_os_buffer_descriptors
+WHERE [database_id] = DB_ID ()
+GROUP BY [allocation_unit_id]) AS [buffers]
+INNER JOIN sys.allocation_units AS [au]
+ON [au].[allocation_unit_id] = [buffers].[allocation_unit_id]
+INNER JOIN sys.partitions AS [p]
+ON [au].[container_id] = [p].[partition_id]
+INNER JOIN sys.indexes AS [i]
+ON [i].[index_id] = [p].[index_id] AND [p].[object_id] = [i].[object_id]
+INNER JOIN sys.objects AS [o]
+ON [o].[object_id] = [i].[object_id]
+INNER JOIN sys.schemas AS [s]
+ON [s].[schema_id] = [o].[schema_id]
+WHERE [o].[is_ms_shipped] = 0
+ORDER BY [TotalMB] DESC;
+
+--Verificar Quais tabelas teriam ganho de performance com COMPRESS
+SELECT s.name AS [Schema], o.name AS [Table_Name], x.name AS [Index_Name], i.partition_number AS [Partition], i.index_id AS [Index_ID], x.type_desc AS [Index_Type],
+i.range_scan_count * 100.0 / (i.range_scan_count + i.leaf_insert_count + i.leaf_delete_count + i.leaf_update_count + i.leaf_page_merge_count + i.singleton_lookup_count) AS [Percent_Scan],
+i.leaf_update_count * 100.0 / (i.range_scan_count + i.leaf_insert_count + i.leaf_delete_count + i.leaf_update_count + i.leaf_page_merge_count + i.singleton_lookup_count) AS [Percent_Update]
+FROM sys.dm_db_index_operational_stats (db_id(), NULL, NULL, NULL) i
+INNER JOIN sys.objects o ON o.object_id = i.object_id
+INNER JOIN sys.schemas s ON o.schema_id = s.schema_id
+INNER JOIN sys.indexes x ON x.object_id = i.object_id AND x.index_id = i.index_id
+WHERE (i.range_scan_count + i.leaf_insert_count + i.leaf_delete_count + leaf_update_count + i.leaf_page_merge_count + i.singleton_lookup_count) <> 0
+AND objectproperty(i.object_id,'IsUserTable') = 1
+ORDER BY [Table_Name] ASC;
+
+--Mostrar DETALHADAMENTE O INICIO E O TÉRMINO DOS PROCESSOS DE BACKUP 
+SELECT
+bup.user_name AS [User],
+bup.database_name AS [Database],
+bup.server_name AS [Server],
+bup.backup_start_date AS [Backup Started],
+bup.backup_finish_date AS [Backup Finished]
+,CAST((CAST(DATEDIFF(s, bup.backup_start_date, bup.backup_finish_date) AS int))/3600 AS varchar) + ' hours, '
++ CAST((CAST(DATEDIFF(s, bup.backup_start_date, bup.backup_finish_date) AS int))/60 AS varchar)+ ' minutes, '
++ CAST((CAST(DATEDIFF(s, bup.backup_start_date, bup.backup_finish_date) AS int))%60 AS varchar)+ ' seconds'
+AS [Total Time]
+FROM msdb.dbo.backupset bup
+WHERE bup.backup_set_id IN
+(SELECT MAX(backup_set_id)
+FROM msdb.dbo.backupset
+WHERE type = 'D'
+GROUP BY database_name)
+AND bup.database_name IN (SELECT name FROM master.dbo.sysdatabases)
+ORDER BY bup.database_name
+
+-- Threads by NUMA Nodes
+SELECT S.parent_node_id AS NUMANode,
+COUNT(*) AS Threads
+FROM sys.dm_os_threads AS T
+INNER JOIN sys.dm_os_schedulers AS S ON S.scheduler_address = T.scheduler_address
+GROUP BY S.parent_node_id;
+
+
+--Lista o tamanho de todos os bancos de dados da instância
+SELECT
+[Database Name] = DB_NAME(database_id),
+[Type] = CASE WHEN Type_Desc = 'ROWS' THEN 'Data File(s)'
+WHEN Type_Desc = 'LOG' THEN 'Log File(s)'
+ELSE Type_Desc END,
+[Size in MB] = CAST( ((SUM(Size)* 8) / 1024.0) AS DECIMAL(18,2) )
+FROM sys.master_files
+-- WHERE database_id = DB_ID(‘Database Name’)
+GROUP BY GROUPING SETS
+((DB_NAME(database_id), Type_Desc),(DB_NAME(database_id)) )
+ORDER BY
+DB_NAME(database_id), Type_Desc DESC
+GO
+
+--Listar 10 consultas que mais utilizam I/O
+SELECT TOP 10
+DB_NAME(st.dbid) AS database_name,
+creation_time,
+last_execution_time,
+total_logical_reads AS [LogicalReads] ,
+total_logical_writes AS [LogicalWrites] ,
+execution_count,
+total_logical_reads+total_logical_writes AS [AggIO],
+(total_logical_reads+total_logical_writes)/(execution_count+0.0) AS [AvgIO],
+st.TEXT,
+st.objectid AS OBJECT_ID
+FROM
+sys.dm_exec_query_stats qs
+CROSS APPLY
+sys.dm_exec_sql_text(sql_handle) st
+WHERE
+total_logical_reads+total_logical_writes > 0
+AND
+sql_handle IS NOT NULL
+ORDER BY
+[AggIO] DESC
+
+
+--Listar quantidade de paginas em memória e qntd de memória alocada por database
+SELECT
+    CASE database_id WHEN 32767 THEN 'ResourceDb' ELSE DB_NAME(database_id)END AS database_name,
+    COUNT(*) AS cached_pages_count,
+    COUNT(*) * .0078125 AS cached_megabytes /* Each page is 8kb, which is .0078125 of an MB */
+FROM
+    sys.dm_os_buffer_descriptors
+GROUP BY
+    DB_NAME(database_id),
+    database_id
+ORDER BY
+    cached_pages_count DESC;
+	
+--Listar Jobs em Execução
+	select name, run_Requested_Date, datediff(mi,run_Requested_Date,getdate())
+from msdb..sysjobactivity A
+join msdb..sysjobs B on A.job_id = B.job_id
+where start_Execution_Date is not null and stop_execution_date is null
+
+
+--Listar usuarios e permissões no banco de dados
+IF EXISTS (SELECT * FROM TEMPDB.dbo.sysobjects WHERE NAME IN ('##Users')) 
+BEGIN
+ DROP TABLE ##Users
+END
+GO
+
+
+IF EXISTS (SELECT * FROM TEMPDB.dbo.sysobjects WHERE NAME IN (N'##ACESSO')) 
+BEGIN
+ DROP TABLE ##ACESSO
+END
+GO
+
+
+
+CREATE TABLE ##Users (
+[sid] varbinary(100) NULL,
+[Login Name] varchar(100) NULL
+)
+
+
+CREATE TABLE ##ACESSO ([USER ID] VARCHAR(MAX), [SERVER LOGIN] VARCHAR(MAX), [DATABASE ROLE] VARCHAR(MAX), [DATABASE] VARCHAR(MAX))
+
+
+
+declare @cmd1 nvarchar(500)
+declare @cmd2 nvarchar(500)
+set @cmd1 = '
+INSERT INTO ##Users ([sid],[Login Name]) SELECT sid, loginname FROM master.dbo.syslogins
+
+INSERT INTO ##ACESSO 
+SELECT su.[name] ,  
+u.[Login Name]  , 
+ sug.name   , ''?''
+ FROM [?].[dbo].[sysusers] su 
+ LEFT OUTER JOIN ##Users u 
+ ON su.sid = u.sid 
+ LEFT OUTER JOIN ([?].[dbo].[sysmembers] sm  
+ INNER JOIN [?].[dbo].[sysusers] sug 
+ ON sm.groupuid = sug.uid) 
+ ON su.uid = sm.memberuid  
+ WHERE su.hasdbaccess = 1 
+ AND su.[name] != ''dbo''
+'
+exec sp_MSforeachdb @command1=@cmd1
+
+SELECT * FROM ##ACESSO 
+where [DATABASE] = 'TESTES_DBA'
+GROUP BY 
+[USER ID] , [SERVER LOGIN]  , [DATABASE ROLE]  , [DATABASE]  
+
+
+
+-- Estimatica de Crescimento do Banco de dados
+DECLARE @endDate datetime, @months smallint;
+SET @endDate = GetDate();  -- Include in the statistic all backups from today
+SET @months = 6;           -- back to the last 6 months.
+ 
+;WITH HIST AS
+   (SELECT BS.database_name AS DatabaseName
+          ,YEAR(BS.backup_start_date) * 100
+           + MONTH(BS.backup_start_date) AS YearMonth
+          ,CONVERT(numeric(10, 1), MIN(BF.file_size / 1048576.0)) AS MinSizeMB
+          ,CONVERT(numeric(10, 1), MAX(BF.file_size / 1048576.0)) AS MaxSizeMB
+          ,CONVERT(numeric(10, 1), AVG(BF.file_size / 1048576.0)) AS AvgSizeMB
+    FROM msdb.dbo.backupset as BS
+         INNER JOIN
+         msdb.dbo.backupfile AS BF
+             ON BS.backup_set_id = BF.backup_set_id
+    WHERE NOT BS.database_name IN
+              ('master', 'msdb', 'model', 'tempdb')
+          AND BF.file_type = 'D'
+          AND BS.backup_start_date BETWEEN DATEADD(mm, - @months, @endDate) AND @endDate
+    GROUP BY BS.database_name
+            ,YEAR(BS.backup_start_date)
+            ,MONTH(BS.backup_start_date))
+SELECT MAIN.DatabaseName
+      ,MAIN.YearMonth
+      ,MAIN.MinSizeMB
+      ,MAIN.MaxSizeMB
+      ,MAIN.AvgSizeMB
+      ,MAIN.AvgSizeMB 
+       - (SELECT TOP 1 SUB.AvgSizeMB
+          FROM HIST AS SUB
+          WHERE SUB.DatabaseName = MAIN.DatabaseName
+                AND SUB.YearMonth < MAIN.YearMonth
+          ORDER BY SUB.YearMonth DESC) AS GrowthMB
+FROM HIST AS MAIN
+ORDER BY MAIN.DatabaseName
+        ,MAIN.YearMonth

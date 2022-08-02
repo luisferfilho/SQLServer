@@ -1,0 +1,17 @@
+DECLARE @sql NVARCHAR(MAX) = N'';
+
+SELECT @sql += N'
+  DROP USER ' + QUOTENAME(name)
+  + N';' 
+FROM sys.database_principals
+WHERE 
+type in ('S','G')
+and name NOT IN (
+'dbo',
+'sys',
+'public',
+'guest',
+'INFORMATION_SCHEMA');
+
+PRINT @sql;
+

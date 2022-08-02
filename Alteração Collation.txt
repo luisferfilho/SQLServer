@@ -1,0 +1,39 @@
+****
+Rotina de alteração de collation:
+use master
+go
+ALTER DATABASE DADOSPRO SET SINGLE_USER WITH ROLLBACK IMMEDIATE 
+go
+Alter Database DADOSPRO Collate Latin1_General_BIN
+go
+ALTER DATABASE DADOSPRO SET MULTI_USER
+go
+
+*****************************************
+
+TIRAR DDL DOS INDICES ANTES DE REALIZAR O DROP
+
+
+*****
+use TMPRD
+go
+
+SELECT 
+   'DROP INDEX ' + name + ' ON ' + 
+   OBJECT_SCHEMA_NAME(object_id) + '.' + OBJECT_NAME(object_Id) 
+FROM sys.indexes
+WHERE is_primary_key = 0
+AND name IS NOT NULL
+AND OBJECT_SCHEMA_NAME(object_id) <> 'sys'
+
+
+********
+USE TMPRD
+go
+SELECT 'ALTER TABLE [' + sys.objects.name + '] ALTER COLUMN [' + sys.columns.name + '] ' + sys.types.name +      CASE sys.types.name     WHEN 'text' THEN ' '     ELSE     '(' + RTRIM(CASE sys.columns.max_length     WHEN -1 THEN 'MAX'     ELSE CONVERT(CHAR,sys.columns.max_length)     END) + ') '      END      + ' ' + ' COLLATE Latin1_General_BIN ' + CASE sys.columns.is_nullable WHEN 0 THEN 'NOT NULL' ELSE 'NULL' END     FROM sys.columns , sys.objects , sys.types     WHERE sys.columns.object_id = sys.objects.object_id     AND sys.objects.TYPE = 'U'     AND sys.types.system_type_id = sys.columns.system_type_id     AND sys.columns.collation_name IS NOT NULL     AND NOT ( sys.objects.NAME LIKE 'sys%' )     AND NOT ( sys.types.name LIKE 'sys%' )
+
+*********************************************************************************
+USE DADOSPRO
+SELECT distinct TABLE_NAME, COLLATION_NAME FROM INFORMATION_SCHEMA.COLUMNS 
+where COLLATION_NAME <> 'Latin1_General_BIN'
+

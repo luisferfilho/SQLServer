@@ -1,0 +1,38 @@
+select A.spid,Substring(nt_username,1,20)as Nt_UserName, A.blocked,
+      case when A.blocked= 0 and(Isnull(C.Qt_Block_By,0)> 0) then 'Bloqueador'
+           when A.blocked = 0 and (Isnull(C.Qt_Block_By,0)<= 0) then 'None'
+           when A.blocked  = A.spid then'Itself' 
+            else'Block por outro' 
+       end Type_block,
+        waittime/1000 [WaitTime(s)],  D.name DataBaseName,
+      Substring(A.program_name,1,20)as Programa,
+       Qt_Blocked = Isnull(B.Qt_Blocked,0),
+       Qt_Block_By= Isnull(C.Qt_Block_By,0),
+       ST.text,ES.host_name, A.cmd
+                                
+from sys.sysprocesses A 
+     join sys.databases D on A.dbid= D.database_id
+left join 
+		(select spid, count(*) Qt_Blocked 
+			from sys.sysprocesses  
+			where  (blocked <> 0)and (blocked<> spid) 
+			group by spid  ) 
+			B on A.spid = B.spid
+		left join (select blocked, count(*) Qt_Block_By 
+					from sys.sysprocesses 
+					group by blocked ) C 
+on A.spid= C.blocked and A.blocked <> A.spid
+
+inner join sys.dm_exec_connections EC on EC.session_id = A.spid
+inner JOIN sys.dm_exec_sessions ES ON ES.session_id = EC.session_id
+CROSS APPLY sys.dm_exec_sql_text(EC.most_recent_sql_handle) AS ST
+
+where A.spid>= 50      --  Conex?es de usu?rio
+order by case when A.blocked = 0 and (Isnull(C.Qt_Block_By,0)> 0) then 'Bloqueador'
+              when A.blocked = 0 and (Isnull(C.Qt_Block_By,0)<= 0) then 'None'
+              when A.blocked = A.spid then'Itself' 
+              else'Block por outro' end, Qt_Blocked, Qt_Block_By, waittime desc
+              
+              
+         
+              

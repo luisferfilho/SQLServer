@@ -1,0 +1,21 @@
+SELECT C.name AS x_Login,
+	B.name as x_Usuario,
+CASE
+WHEN
+D.is_policy_checked = 1 THEN 'YES'
+ELSE 'NO'
+END as UsePoliceSecurity,
+CASE WHEN
+D.is_expiration_checked = 1 THEN 'YES'
+ELSE 'NO'
+END as UseExpirationPassaword
+From
+sys.database_principals A WITH(NOLOCK)
+JOIN sys.sysusers B WITH(NOLOCK) ON A.principal_id = B.uid
+LEFT JOIN sys.syslogins C WITH (NOLOCK) ON B.sid = C.sid
+LEFT JOIN sys.sql_logins D ON D.name = C.loginname
+WHERE
+A.type_desc != 'DATABASE_ROLE'
+and
+C.name is not null
+order by UsePoliceSecurity

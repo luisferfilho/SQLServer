@@ -1,0 +1,7 @@
+		SELECT 
+		 DB_NAME(database_id) AS DBName,
+		 COUNT(*) AS TotalPages 
+		FROM sys.dm_os_buffer_descriptors
+		GROUP BY
+		 DB_NAME(database_id)
+		ORDER BY TotalPages DESC
